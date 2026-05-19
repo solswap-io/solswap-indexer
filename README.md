@@ -2,7 +2,7 @@
 
 Solswap spot analytics indexer for Solana.
 
-This service follows the same role split as `../ton-indexer`: it is a standalone read service that normalizes on-chain activity into chart- and portfolio-friendly APIs for the web app.
+This service is a standalone read service that normalizes on-chain activity into chart- and portfolio-friendly APIs for the web app.
 
 ## What it serves
 - Wallet swap history across Batch Swap, DLMM, and RFQ routes
