@@ -94,3 +94,9 @@ SOLSWAP_INDEXER_BASE_URL=https://si.soramitsu.io npm run smoke:production
 
 The smoke check validates API identity and required wallet/OpenAPI paths. It
 must fail if SI is accidentally routed to the TON indexer.
+
+Deployment evidence is tracked in
+`scripts/production-deployment-evidence.json`. Keep it blocked until the Docker
+image digest, deployment ID, tagged commit, exact smoke command, operator, and
+UTC smoke timestamp are recorded and
+`npm run audit:deployment-evidence -- --require-ready` passes.
