@@ -18,6 +18,19 @@ import type {
   WalletSwapRecord,
   WalletSwapsResponse,
   SpotPositionsResponse,
+  SolanaTokenBalance,
+  SolanaTokenProgram,
+  TokenMetadata,
+  TokenMetadataBatchResponse,
+  TokenMetadataResponse,
+  TokenTransferFee,
+  TokenTransferFeeConfig,
+  TokenTransferHook,
+  WalletAssetsResponse,
+  WalletBalancesResponse,
+  WalletStateResponse,
+  WalletTransactionRecord,
+  WalletTransactionsResponse,
 } from './models'
 import type { Config } from './config'
 
@@ -37,6 +50,9 @@ const INTERVAL_SECONDS: Record<CandleInterval, number> = {
   '1d': 86_400,
 }
 
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA')
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb')
+
 export class IndexerService {
   private readonly connection: Connection
   private readonly cache = new Map<string, CacheEntry<unknown>>()
@@ -51,6 +67,430 @@ export class IndexerService {
       rfq: config.rfqProgramId?.toBase58() ?? null,
     }
     this.quoteMint = config.ssMint?.toBase58() ?? null
+  }
+
+  async getWalletBalances(walletAddress: string): Promise<WalletBalancesResponse> {
+    const wallet = new PublicKey(walletAddress)
+    const cacheKey = `wallet-balances:${wallet.toBase58()}`
+    return this.memoize(cacheKey, async () => {
+      const [lamports, splTokens, token2022Tokens] = await Promise.all([
+        this.withRpcRetry(() => this.connection.getBalance(wallet, 'confirmed'), 'getBalance'),
+        this.loadTokenAccounts(wallet, TOKEN_PROGRAM_ID, 'spl-token'),
+        this.loadTokenAccounts(wallet, TOKEN_2022_PROGRAM_ID, 'token-2022'),
+      ])
+      const tokens = [...splTokens, ...token2022Tokens].sort((a, b) => {
+        const byMint = a.mint.localeCompare(b.mint)
+        return byMint !== 0 ? byMint : a.accountAddress.localeCompare(b.accountAddress)
+      })
+
+      return {
+        wallet: wallet.toBase58(),
+        native: {
+          type: 'native',
+          mint: 'SOL',
+          lamports: this.numberToIntegerString(lamports),
+          decimals: 9,
+          uiAmountString: this.formatIntegerAmount(this.numberToIntegerString(lamports), 9),
+        },
+        tokens,
+        total: tokens.length + 1,
+        syncedAt: Math.floor(Date.now() / 1000),
+      }
+    })
+  }
+
+  async getWalletAssets(walletAddress: string): Promise<WalletAssetsResponse> {
+    const balances = await this.getWalletBalances(walletAddress)
+    return {
+      wallet: balances.wallet,
+      assets: [balances.native, ...balances.tokens],
+      total: balances.total,
+      syncedAt: balances.syncedAt,
+    }
+  }
+
+  async getWalletState(walletAddress: string): Promise<WalletStateResponse> {
+    const wallet = new PublicKey(walletAddress)
+    const cacheKey = `wallet-state:${wallet.toBase58()}`
+    return this.memoize(cacheKey, async () => {
+      const account = await this.withRpcRetry(() => this.connection.getAccountInfo(wallet, 'confirmed'), 'getAccountInfo')
+      if (!account) {
+        return {
+          wallet: wallet.toBase58(),
+          exists: false,
+          lamports: '0',
+          owner: null,
+          executable: false,
+          rentEpoch: null,
+          dataLength: 0,
+          syncedAt: Math.floor(Date.now() / 1000),
+        }
+      }
+
+      return {
+        wallet: wallet.toBase58(),
+        exists: true,
+        lamports: this.numberToIntegerString(account.lamports),
+        owner: account.owner.toBase58(),
+        executable: account.executable,
+        rentEpoch: account.rentEpoch == null ? null : account.rentEpoch.toString(),
+        dataLength: account.data.length,
+        syncedAt: Math.floor(Date.now() / 1000),
+      }
+    })
+  }
+
+  async getWalletTransactions(
+    walletAddress: string,
+    before: string | null,
+    limit: number,
+  ): Promise<WalletTransactionsResponse> {
+    const wallet = new PublicKey(walletAddress)
+    const boundedLimit = Math.max(1, Math.min(limit, this.config.accountScanLimit))
+    const cacheKey = `wallet-txs:${wallet.toBase58()}:${before ?? ''}:${boundedLimit}`
+    return this.memoize(cacheKey, async () => {
+      const signatures = await this.withRpcRetry(
+        () => this.connection.getSignaturesForAddress(wallet, {
+          before: before ?? undefined,
+          limit: boundedLimit,
+        }),
+        'getSignaturesForAddress',
+      )
+      const parsedTransactions = await this.loadParsedTransactions(signatures.map((entry) => entry.signature))
+      const parsedBySignature = new Map(parsedTransactions.map((tx) => [tx.transaction.signatures[0], tx]))
+      const transactions: WalletTransactionRecord[] = signatures.map((entry) => {
+        const tx = parsedBySignature.get(entry.signature) ?? null
+        return this.walletTransactionRecord(entry.signature, entry.slot, entry.blockTime ?? 0, entry.err != null, wallet.toBase58(), tx)
+      })
+
+      return {
+        wallet: wallet.toBase58(),
+        before,
+        nextBefore: signatures.length === boundedLimit ? signatures[signatures.length - 1]?.signature ?? null : null,
+        limit: boundedLimit,
+        total: transactions.length,
+        syncedAt: Math.floor(Date.now() / 1000),
+        transactions,
+      }
+    })
+  }
+
+  async getTokenMetadata(mintAddress: string): Promise<TokenMetadataResponse> {
+    const mint = new PublicKey(mintAddress)
+    const cacheKey = `token-metadata:${mint.toBase58()}`
+    return this.memoize(cacheKey, async () => {
+      const syncedAt = Math.floor(Date.now() / 1000)
+      const response = await this.withRpcRetry(
+        () => this.connection.getParsedAccountInfo(mint, 'confirmed'),
+        'getParsedAccountInfo',
+      )
+      const account = response.value
+      if (!account) {
+        return {
+          mint: mint.toBase58(),
+          exists: false,
+          program: 'unknown',
+          programId: null,
+          extensions: [],
+          transferFeeConfig: null,
+          transferHook: null,
+          decimals: null,
+          supply: null,
+          uiSupplyString: null,
+          mintAuthority: null,
+          freezeAuthority: null,
+          isInitialized: null,
+          name: null,
+          symbol: null,
+          uri: null,
+          syncedAt,
+        }
+      }
+
+      const parsed = (account.data as any)?.parsed?.info ?? null
+      const decimals = typeof parsed?.decimals === 'number' ? parsed.decimals : null
+      const supply = typeof parsed?.supply === 'string' ? parsed.supply : null
+      const programId = account.owner.toBase58()
+      const extensions = this.tokenExtensions(parsed)
+      return {
+        mint: mint.toBase58(),
+        exists: true,
+        program: this.tokenProgramName(programId),
+        programId,
+        extensions,
+        transferFeeConfig: this.tokenTransferFeeConfig(parsed),
+        transferHook: this.tokenTransferHook(parsed, mint),
+        decimals,
+        supply,
+        uiSupplyString: supply != null && decimals != null ? this.formatIntegerAmount(supply, decimals) : null,
+        mintAuthority: typeof parsed?.mintAuthority === 'string' ? parsed.mintAuthority : null,
+        freezeAuthority: typeof parsed?.freezeAuthority === 'string' ? parsed.freezeAuthority : null,
+        isInitialized: typeof parsed?.isInitialized === 'boolean' ? parsed.isInitialized : null,
+        name: null,
+        symbol: null,
+        uri: null,
+        syncedAt,
+      }
+    })
+  }
+
+  async getTokenMetadataBatch(mintAddresses: string[]): Promise<TokenMetadataBatchResponse> {
+    const uniqueMints = [...new Set(mintAddresses)]
+    const tokens = await Promise.all(uniqueMints.map((mint) => this.getTokenMetadata(mint)))
+    return {
+      total: tokens.length,
+      syncedAt: Math.floor(Date.now() / 1000),
+      tokens,
+    }
+  }
+
+  private async loadTokenAccounts(
+    owner: PublicKey,
+    programId: PublicKey,
+    program: SolanaTokenProgram,
+  ): Promise<SolanaTokenBalance[]> {
+    const response = await this.withRpcRetry(
+      () => this.connection.getParsedTokenAccountsByOwner(owner, { programId }, 'confirmed'),
+      'getParsedTokenAccountsByOwner',
+    )
+    return response.value.map((entry) => {
+      const parsed = (entry.account.data as any)?.parsed?.info ?? {}
+      const tokenAmount = parsed.tokenAmount ?? {}
+      const amount = typeof tokenAmount.amount === 'string' ? tokenAmount.amount : '0'
+      const decimals = typeof tokenAmount.decimals === 'number' ? tokenAmount.decimals : 0
+      return {
+        type: 'token',
+        accountAddress: entry.pubkey.toBase58(),
+        mint: typeof parsed.mint === 'string' ? parsed.mint : '',
+        owner: typeof parsed.owner === 'string' ? parsed.owner : owner.toBase58(),
+        program,
+        programId: programId.toBase58(),
+        amount,
+        decimals,
+        uiAmountString: this.formatIntegerAmount(amount, decimals),
+        state: typeof parsed.state === 'string' ? parsed.state : null,
+        isNative: Boolean(parsed.isNative),
+        delegatedAmount: this.parsedTokenAmount(parsed.delegatedAmount),
+        rentExemptReserve: this.parsedTokenAmount(parsed.rentExemptReserve),
+      }
+    })
+  }
+
+  private walletTransactionRecord(
+    signature: string,
+    slot: number,
+    blockTime: number,
+    signatureFailed: boolean,
+    wallet: string,
+    tx: ParsedTransactionWithMeta | null,
+  ): WalletTransactionRecord {
+    if (!tx) {
+      return {
+        signature,
+        slot,
+        timestamp: blockTime,
+        status: signatureFailed ? 'failed' : 'success',
+        feeLamports: null,
+        nativeBalanceChangeLamports: null,
+        tokenBalanceChanges: [],
+        programIds: [],
+        solswapRoute: null,
+      }
+    }
+
+    return {
+      signature,
+      slot: tx.slot,
+      timestamp: tx.blockTime ?? blockTime,
+      status: tx.meta?.err || signatureFailed ? 'failed' : 'success',
+      feeLamports: tx.meta?.fee == null ? null : this.numberToIntegerString(tx.meta.fee),
+      nativeBalanceChangeLamports: this.nativeBalanceChangeLamports(tx, wallet),
+      tokenBalanceChanges: this.walletTokenBalanceChanges(tx, wallet),
+      programIds: [...this.collectProgramIds(tx)].sort(),
+      solswapRoute: this.detectRoute(tx),
+    }
+  }
+
+  private nativeBalanceChangeLamports(tx: ParsedTransactionWithMeta, wallet: string): string | null {
+    let seen = false
+    let delta = 0n
+    for (let index = 0; index < tx.transaction.message.accountKeys.length; index += 1) {
+      if (this.accountAddressAt(tx, index) !== wallet) continue
+      const pre = tx.meta?.preBalances?.[index]
+      const post = tx.meta?.postBalances?.[index]
+      if (pre == null || post == null) continue
+      seen = true
+      delta += BigInt(Math.trunc(post)) - BigInt(Math.trunc(pre))
+    }
+    return seen ? delta.toString() : null
+  }
+
+  private walletTokenBalanceChanges(tx: ParsedTransactionWithMeta, wallet: string) {
+    const before = this.ownerMintRawAmounts(tx.meta?.preTokenBalances ?? [], wallet)
+    const after = this.ownerMintRawAmounts(tx.meta?.postTokenBalances ?? [], wallet)
+    const mints = new Set([...before.keys(), ...after.keys()])
+    return [...mints]
+      .map((mint) => {
+        const pre = before.get(mint)
+        const post = after.get(mint)
+        const preAmount = pre?.amount ?? 0n
+        const postAmount = post?.amount ?? 0n
+        const decimals = post?.decimals ?? pre?.decimals ?? 0
+        const amountDelta = postAmount - preAmount
+        return {
+          mint,
+          preAmount: preAmount.toString(),
+          postAmount: postAmount.toString(),
+          amountDelta: amountDelta.toString(),
+          decimals,
+          uiAmountDeltaString: this.formatSignedIntegerAmount(amountDelta.toString(), decimals),
+        }
+      })
+      .filter((entry) => entry.amountDelta !== '0')
+      .sort((a, b) => a.mint.localeCompare(b.mint))
+  }
+
+  private ownerMintRawAmounts(balances: TokenBalance[], wallet: string): Map<string, { amount: bigint; decimals: number }> {
+    const totals = new Map<string, { amount: bigint; decimals: number }>()
+    for (const balance of balances) {
+      if (balance.owner !== wallet) continue
+      const amount = this.parseIntegerAmount(balance.uiTokenAmount.amount)
+      const existing = totals.get(balance.mint) ?? { amount: 0n, decimals: balance.uiTokenAmount.decimals }
+      existing.amount += amount
+      existing.decimals = balance.uiTokenAmount.decimals
+      totals.set(balance.mint, existing)
+    }
+    return totals
+  }
+
+  private parsedTokenAmount(value: unknown): string | null {
+    if (typeof value === 'string') return value
+    if (value && typeof value === 'object' && typeof (value as { amount?: unknown }).amount === 'string') {
+      return (value as { amount: string }).amount
+    }
+    return null
+  }
+
+  private tokenProgramName(programId: string): SolanaTokenProgram | 'unknown' {
+    if (programId === TOKEN_PROGRAM_ID.toBase58()) return 'spl-token'
+    if (programId === TOKEN_2022_PROGRAM_ID.toBase58()) return 'token-2022'
+    return 'unknown'
+  }
+
+  private tokenExtensions(parsed: unknown): string[] {
+    return [...new Set(this.tokenExtensionEntries(parsed).map((entry) => entry.extension))].sort()
+  }
+
+  private tokenTransferFeeConfig(parsed: unknown): TokenTransferFeeConfig | null {
+    const state = this.tokenExtensionState(parsed, 'transferFeeConfig')
+    if (!state) return null
+
+    return {
+      transferFeeConfigAuthority: this.stringOrNull(state.transferFeeConfigAuthority),
+      withdrawWithheldAuthority: this.stringOrNull(state.withdrawWithheldAuthority),
+      withheldAmount: this.integerStringOrNull(state.withheldAmount),
+      olderTransferFee: this.tokenTransferFee(state.olderTransferFee),
+      newerTransferFee: this.tokenTransferFee(state.newerTransferFee),
+    }
+  }
+
+  private tokenTransferHook(parsed: unknown, mint: PublicKey): TokenTransferHook | null {
+    const state = this.tokenExtensionState(parsed, 'transferHook')
+    if (!state) return null
+    const programId = this.stringOrNull(state.programId)
+
+    return {
+      authority: this.stringOrNull(state.authority),
+      programId,
+      extraAccountMetasAddress: programId == null ? null : this.transferHookExtraAccountMetasAddress(mint, programId),
+    }
+  }
+
+  private transferHookExtraAccountMetasAddress(mint: PublicKey, programId: string): string | null {
+    try {
+      const [address] = PublicKey.findProgramAddressSync(
+        [Buffer.from('extra-account-metas'), mint.toBuffer()],
+        new PublicKey(programId),
+      )
+      return address.toBase58()
+    } catch {
+      return null
+    }
+  }
+
+  private tokenTransferFee(value: unknown): TokenTransferFee | null {
+    if (!this.isRecord(value)) return null
+
+    return {
+      epoch: this.integerStringOrNull(value.epoch),
+      maximumFee: this.integerStringOrNull(value.maximumFee),
+      transferFeeBasisPoints: this.integerNumberOrNull(value.transferFeeBasisPoints),
+    }
+  }
+
+  private tokenExtensionState(parsed: unknown, extensionName: string): Record<string, unknown> | null {
+    const entry = this.tokenExtensionEntries(parsed).find((candidate) => candidate.extension === extensionName)
+    return this.isRecord(entry?.state) ? entry.state : null
+  }
+
+  private tokenExtensionEntries(parsed: unknown): Array<{ extension: string; state: unknown }> {
+    if (!this.isRecord(parsed) || !Array.isArray(parsed.extensions)) return []
+
+    return parsed.extensions.flatMap((entry: unknown) => {
+      if (!this.isRecord(entry) || typeof entry.extension !== 'string') return []
+      return [{ extension: entry.extension, state: entry.state }]
+    })
+  }
+
+  private stringOrNull(value: unknown): string | null {
+    return typeof value === 'string' && value.length > 0 ? value : null
+  }
+
+  private integerStringOrNull(value: unknown): string | null {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value.toString()
+    if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) return null
+    return value
+  }
+
+  private integerNumberOrNull(value: unknown): number | null {
+    if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 0) return value
+    if (typeof value !== 'string' || !/^(0|[1-9][0-9]*)$/.test(value)) return null
+    const parsed = Number.parseInt(value, 10)
+    return Number.isSafeInteger(parsed) ? parsed : null
+  }
+
+  private isRecord(value: unknown): value is Record<string, unknown> {
+    return value != null && typeof value === 'object' && !Array.isArray(value)
+  }
+
+  private parseIntegerAmount(value: string): bigint {
+    try {
+      return BigInt(value)
+    } catch {
+      return 0n
+    }
+  }
+
+  private numberToIntegerString(value: number): string {
+    if (!Number.isFinite(value)) return '0'
+    return BigInt(Math.trunc(value)).toString()
+  }
+
+  private formatSignedIntegerAmount(value: string, decimals: number): string {
+    const negative = value.startsWith('-')
+    const formatted = this.formatIntegerAmount(negative ? value.slice(1) : value, decimals)
+    if (!negative || formatted === '0') return formatted
+    return `-${formatted}`
+  }
+
+  private formatIntegerAmount(value: string, decimals: number): string {
+    const normalizedDecimals = Math.max(0, decimals)
+    const digits = value.replace(/^\+/, '').replace(/^0+(?=\d)/, '') || '0'
+    if (normalizedDecimals === 0) return digits
+    const padded = digits.padStart(normalizedDecimals + 1, '0')
+    const integerPart = padded.slice(0, -normalizedDecimals) || '0'
+    const fractionPart = padded.slice(-normalizedDecimals).replace(/0+$/, '')
+    return fractionPart.length === 0 ? integerPart : `${integerPart}.${fractionPart}`
   }
 
   async getWalletSwaps(walletAddress: string, marketKey?: string | null): Promise<WalletSwapsResponse> {
@@ -101,7 +541,7 @@ export class IndexerService {
     const cacheKey = `pending-intents:${wallet.toBase58()}:${marketAddress}`
     return this.memoize(cacheKey, async () => {
       const market = new PublicKey(marketAddress)
-      const marketAccount = await this.connection.getAccountInfo(market, 'confirmed')
+      const marketAccount = await this.withRpcRetry(() => this.connection.getAccountInfo(market, 'confirmed'), 'getAccountInfo')
       if (!marketAccount) {
         return {
           wallet: wallet.toBase58(),
@@ -112,11 +552,14 @@ export class IndexerService {
       }
 
       const marketConfig = decodeMarketConfig(Uint8Array.from(marketAccount.data))
-      const slot = BigInt(await this.connection.getSlot('confirmed'))
+      const slot = BigInt(await this.withRpcRetry(() => this.connection.getSlot('confirmed'), 'getSlot'))
       const currentEpoch = currentEpochForSlot(slot, marketConfig.scheduleStartSlot, marketConfig.auctionDurationSlots)
       const epochs = [currentEpoch - 1n, currentEpoch, currentEpoch + 1n].filter((value) => value >= 0n)
       const pdas = epochs.map((epoch) => batchIntentPda(this.config.batchAuctionProgramId as PublicKey, market, wallet, epoch))
-      const accounts = await this.connection.getMultipleAccountsInfo(pdas, 'confirmed')
+      const accounts = await this.withRpcRetry(
+        () => this.connection.getMultipleAccountsInfo(pdas, 'confirmed'),
+        'getMultipleAccountsInfo',
+      )
       const intents: PendingIntentSummary[] = []
 
       for (let index = 0; index < accounts.length; index += 1) {
@@ -160,7 +603,7 @@ export class IndexerService {
     const cacheKey = `market-candles:${marketAddress}:${interval}:${limit}`
     return this.memoize(cacheKey, async () => {
       const market = new PublicKey(marketAddress)
-      const marketAccount = await this.connection.getAccountInfo(market, 'confirmed')
+      const marketAccount = await this.withRpcRetry(() => this.connection.getAccountInfo(market, 'confirmed'), 'getAccountInfo')
       if (!marketAccount) {
         return {
           marketAddress,
@@ -172,9 +615,12 @@ export class IndexerService {
       }
 
       const marketConfig = decodeMarketConfig(Uint8Array.from(marketAccount.data))
-      const signatures = await this.connection.getSignaturesForAddress(market, {
-        limit: this.config.marketScanLimit,
-      })
+      const signatures = await this.withRpcRetry(
+        () => this.connection.getSignaturesForAddress(market, {
+          limit: this.config.marketScanLimit,
+        }),
+        'getSignaturesForAddress',
+      )
       const parsedTransactions = await this.loadParsedTransactions(signatures.map((entry) => entry.signature))
       const candles = this.aggregateVaultCandles(parsedTransactions, marketConfig.vaultToken.toBase58(), marketConfig.vaultXor.toBase58(), interval)
         .slice(-limit)
@@ -193,7 +639,7 @@ export class IndexerService {
     const cacheKey = `market-overview:${marketAddress}`
     return this.memoize(cacheKey, async () => {
       const market = new PublicKey(marketAddress)
-      const marketAccount = await this.connection.getAccountInfo(market, 'confirmed')
+      const marketAccount = await this.withRpcRetry(() => this.connection.getAccountInfo(market, 'confirmed'), 'getAccountInfo')
       if (!marketAccount) {
         return {
           marketAddress,
@@ -230,10 +676,10 @@ export class IndexerService {
       let epochState: ReturnType<typeof decodeEpochState> | null = null
 
       if (this.config.batchAuctionProgramId) {
-        const slot = BigInt(await this.connection.getSlot('confirmed'))
+        const slot = BigInt(await this.withRpcRetry(() => this.connection.getSlot('confirmed'), 'getSlot'))
         currentEpoch = currentEpochForSlot(slot, marketConfig.scheduleStartSlot, marketConfig.auctionDurationSlots)
         const epochPda = batchEpochPda(this.config.batchAuctionProgramId, market, currentEpoch)
-        const epochAccount = await this.connection.getAccountInfo(epochPda, 'confirmed')
+        const epochAccount = await this.withRpcRetry(() => this.connection.getAccountInfo(epochPda, 'confirmed'), 'getAccountInfo')
         if (epochAccount) {
           epochState = decodeEpochState(Uint8Array.from(epochAccount.data))
         }
@@ -272,12 +718,58 @@ export class IndexerService {
     return value
   }
 
+  private async withRpcRetry<T>(operation: () => Promise<T>, label: string): Promise<T> {
+    const maxAttempts = Math.max(1, this.config.rpcRetryAttempts)
+    let lastError: unknown = null
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        return await operation()
+      } catch (error) {
+        lastError = error
+        if (attempt >= maxAttempts || !this.isRetryableRpcError(error)) break
+        await this.delay(this.retryDelayMs(attempt))
+      }
+    }
+
+    throw new Error(`${label}_failed_after_${maxAttempts}_attempts`, { cause: lastError })
+  }
+
+  private isRetryableRpcError(error: unknown): boolean {
+    const status = typeof (error as { status?: unknown })?.status === 'number'
+      ? (error as { status: number }).status
+      : null
+    if (status != null) return status === 408 || status === 425 || status === 429 || status >= 500
+
+    const code = typeof (error as { code?: unknown })?.code === 'string'
+      ? (error as { code: string }).code
+      : null
+    if (code && ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENOTFOUND', 'ECONNREFUSED'].includes(code)) return true
+
+    const message = error instanceof Error ? error.message.toLowerCase() : ''
+    return message.includes('429') || message.includes('timeout') || message.includes('temporarily unavailable')
+  }
+
+  private retryDelayMs(attempt: number): number {
+    const baseDelay = Math.max(0, this.config.rpcRetryBaseDelayMs)
+    const cappedExponent = Math.min(attempt - 1, 6)
+    return Math.min(baseDelay * 2 ** cappedExponent, 5_000)
+  }
+
+  private delay(ms: number): Promise<void> {
+    if (ms <= 0) return Promise.resolve()
+    return new Promise((resolve) => setTimeout(resolve, ms))
+  }
+
   private async loadParsedTransactions(signatures: string[]): Promise<ParsedTransactionWithMeta[]> {
     if (signatures.length === 0) return []
-    const parsed = await this.connection.getParsedTransactions(signatures, {
-      commitment: 'confirmed',
-      maxSupportedTransactionVersion: 0,
-    })
+    const parsed = await this.withRpcRetry(
+      () => this.connection.getParsedTransactions(signatures, {
+        commitment: 'confirmed',
+        maxSupportedTransactionVersion: 0,
+      }),
+      'getParsedTransactions',
+    )
     return parsed.filter((entry): entry is ParsedTransactionWithMeta => !!entry)
   }
 
