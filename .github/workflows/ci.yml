@@ -44,6 +44,10 @@ jobs:
 
       - run: npm ci
       - run: npm audit --omit=dev
+      - name: Deployment evidence audit
+        run: |
+          npm run test:deployment-evidence-audit
+          npm run audit:deployment-evidence
       - run: npm test
       - run: npm run build
       - name: Build production Docker image

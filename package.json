@@ -10,7 +10,9 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "test": "tsx src/scripts/smoke.ts && tsx src/scripts/deployment-manifest-test.ts && tsx src/scripts/production-smoke-adversarial-test.ts",
-    "smoke:production": "tsx src/scripts/production-smoke.ts"
+    "smoke:production": "tsx src/scripts/production-smoke.ts",
+    "audit:deployment-evidence": "bash scripts/audit-deployment-evidence.sh",
+    "test:deployment-evidence-audit": "bash scripts/test-deployment-evidence-audit.sh"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
