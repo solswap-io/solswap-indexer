@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - develop
+      - master
+  pull_request:
+    branches:
+      - develop
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Branch flow audit
+        run: |
+          bash ./scripts/test-branch-flow-audit.sh
+          bash ./scripts/audit-branch-flow.sh
+
+      - name: Audit public artifacts
+        run: ./scripts/audit-public-artifacts.sh
+
+      - name: TODO debt audit
+        run: |
+          bash ./scripts/test-todo-debt-audit.sh
+          bash ./scripts/audit-todo-debt.sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm test
+      - run: npm run build
+      - name: Build production Docker image
+        run: docker build -t solswap-indexer:ci .
