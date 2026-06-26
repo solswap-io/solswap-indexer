@@ -85,6 +85,22 @@ const requiredEvidenceFields = [
   'operator'
 ];
 
+const allowedManifestFields = [
+  'schemaVersion',
+  'scope',
+  'serviceId',
+  'baseUrl',
+  'status',
+  'releaseEnabled',
+  'lastReviewed',
+  'blockers',
+  'smokeCommand',
+  'dockerBuildCommand',
+  'readyVerificationCommands',
+  'requiredEvidenceFields',
+  'deploymentEvidence'
+];
+
 function fail(message) {
   errors.push(message);
 }
@@ -158,6 +174,18 @@ function secretLikeKeyReason(value, path = '$') {
   return null;
 }
 
+function rejectUnsupportedKeys(value, allowedFields, path) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return;
+  }
+  const allowed = new Set(allowedFields);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      fail(`${path}.${key} is not supported in public deployment evidence`);
+    }
+  }
+}
+
 const manifest = readJson(evidenceFile);
 let contract = null;
 
@@ -166,6 +194,7 @@ if (manifest) {
   if (secretLikePath) {
     fail(`${secretLikePath} must not be included in public deployment evidence`);
   }
+  rejectUnsupportedKeys(manifest, allowedManifestFields, 'deployment evidence');
 
   if (manifest.schemaVersion !== 1) {
     fail('schemaVersion must be 1');
@@ -230,10 +259,16 @@ if (manifest) {
     fail('status must be ready when --require-ready is used');
   }
 
-  const declaredFields = new Set(requireArray(manifest.requiredEvidenceFields, 'requiredEvidenceFields'));
+  const declaredFieldList = requireArray(manifest.requiredEvidenceFields, 'requiredEvidenceFields');
+  const declaredFields = new Set(declaredFieldList);
   for (const field of requiredEvidenceFields) {
     if (!declaredFields.has(field)) {
       fail(`requiredEvidenceFields missing ${field}`);
+    }
+  }
+  for (const field of declaredFieldList) {
+    if (!requiredEvidenceFields.includes(field)) {
+      fail(`unsupported deployment evidence field in manifest: ${field}`);
     }
   }
 
@@ -257,6 +292,7 @@ if (manifest) {
       fail(`deploymentEvidence[${index}] must be an object`);
       return;
     }
+    rejectUnsupportedKeys(entry, requiredEvidenceFields, `deploymentEvidence[${index}]`);
 
     for (const field of requiredEvidenceFields) {
       if (!nonEmptyString(entry[field])) {
