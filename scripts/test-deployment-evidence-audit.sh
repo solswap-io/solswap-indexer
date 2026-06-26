@@ -164,6 +164,11 @@ cp "$ready" "$ready_no_evidence"
 perl -0pi -e 's/"deploymentEvidence": \[[\s\S]*?\n  \]/"deploymentEvidence": []/' "$ready_no_evidence"
 expect_failure "ready evidence without live smoke" "ready deployment evidence requires at least one successful live production smoke record" run_audit "$ready_no_evidence" --require-ready
 
+ready_with_blocker="$tmp_dir/ready-with-blocker.json"
+cp "$ready" "$ready_with_blocker"
+perl -0pi -e 's/"blockers": \[\]/"blockers": ["production-routing-mismatch"]/' "$ready_with_blocker"
+expect_failure "ready evidence carries blockers" "blockers must be empty when deployment evidence is ready" run_audit "$ready_with_blocker" --require-ready
+
 bad_commit="$tmp_dir/bad-commit.json"
 cp "$ready" "$bad_commit"
 perl -0pi -e 's/1111111111111111111111111111111111111111/1111/' "$bad_commit"
@@ -188,5 +193,15 @@ bad_timestamp="$tmp_dir/bad-timestamp.json"
 cp "$ready" "$bad_timestamp"
 perl -0pi -e 's/2026-06-26T00:00:00Z/2026-06-26/' "$bad_timestamp"
 expect_failure "bad smoke timestamp evidence" "smokePassedAt must be an ISO-8601 UTC second timestamp" run_audit "$bad_timestamp" --require-ready
+
+secret_top_level="$tmp_dir/secret-top-level.json"
+cp "$ready" "$secret_top_level"
+perl -0pi -e 's/"deploymentEvidence": \[/"privateKey": "do-not-commit",\n  "deploymentEvidence": [/' "$secret_top_level"
+expect_failure "secret-like deployment evidence key" "must not be included in public deployment evidence" run_audit "$secret_top_level" --require-ready
+
+secret_nested="$tmp_dir/secret-nested.json"
+cp "$ready" "$secret_nested"
+perl -0pi -e 's/"operator": "release"/"operator": "release",\n      "authorization": "Bearer do-not-commit"/' "$secret_nested"
+expect_failure "nested secret-like deployment evidence key" "must not be included in public deployment evidence" run_audit "$secret_nested" --require-ready
 
 echo "[deployment-evidence-test] all assertions passed"
