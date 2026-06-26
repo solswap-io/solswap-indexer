@@ -27,6 +27,8 @@ write_blocked_manifest() {
   "smokeCommand": "SOLSWAP_INDEXER_BASE_URL=https://si.soramitsu.io npm run smoke:production",
   "dockerBuildCommand": "docker build -t solswap-indexer:release .",
   "readyVerificationCommands": [
+    "npm run test:deployment-evidence-template",
+    "npm run generate:deployment-evidence-template -- --output build/reports/production-deployment-evidence-template.json",
     "npm run test:deployment-evidence-audit",
     "npm run audit:deployment-evidence -- --require-ready",
     "docker build -t solswap-indexer:release .",
@@ -60,6 +62,8 @@ write_ready_manifest() {
   "smokeCommand": "SOLSWAP_INDEXER_BASE_URL=https://si.soramitsu.io npm run smoke:production",
   "dockerBuildCommand": "docker build -t solswap-indexer:release .",
   "readyVerificationCommands": [
+    "npm run test:deployment-evidence-template",
+    "npm run generate:deployment-evidence-template -- --output build/reports/production-deployment-evidence-template.json",
     "npm run test:deployment-evidence-audit",
     "npm run audit:deployment-evidence -- --require-ready",
     "docker build -t solswap-indexer:release .",
@@ -153,6 +157,16 @@ missing_ready_command="$tmp_dir/missing-ready-command.json"
 cp "$blocked" "$missing_ready_command"
 perl -0pi -e 's/npm run audit:deployment-evidence -- --require-ready/npm run audit:deployment-evidence/' "$missing_ready_command"
 expect_failure "missing require-ready command" "readyVerificationCommands missing npm run audit:deployment-evidence -- --require-ready" run_audit "$missing_ready_command"
+
+missing_template_test_command="$tmp_dir/missing-template-test-command.json"
+cp "$blocked" "$missing_template_test_command"
+perl -0pi -e 's/"npm run test:deployment-evidence-template",\n//' "$missing_template_test_command"
+expect_failure "missing template self-test command" "readyVerificationCommands missing npm run test:deployment-evidence-template" run_audit "$missing_template_test_command"
+
+missing_template_generator_command="$tmp_dir/missing-template-generator-command.json"
+cp "$blocked" "$missing_template_generator_command"
+perl -0pi -e 's/"npm run generate:deployment-evidence-template -- --output build\/reports\/production-deployment-evidence-template.json",\n//' "$missing_template_generator_command"
+expect_failure "missing template generator command" "readyVerificationCommands missing npm run generate:deployment-evidence-template -- --output build/reports/production-deployment-evidence-template.json" run_audit "$missing_template_generator_command"
 
 missing_field="$tmp_dir/missing-field.json"
 cp "$blocked" "$missing_field"

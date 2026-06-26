@@ -192,6 +192,8 @@ if (manifest) {
 
     const commands = requireArray(manifest.readyVerificationCommands, 'readyVerificationCommands').join('\n');
     for (const marker of [
+      'npm run test:deployment-evidence-template',
+      'npm run generate:deployment-evidence-template -- --output build/reports/production-deployment-evidence-template.json',
       'npm run test:deployment-evidence-audit',
       'npm run audit:deployment-evidence -- --require-ready',
       contract.dockerBuildCommand,
