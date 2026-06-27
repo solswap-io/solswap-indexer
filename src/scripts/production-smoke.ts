@@ -11,6 +11,7 @@ type ServiceInfo = {
   serviceId?: unknown
   ecosystem?: unknown
   chainId?: unknown
+  network?: unknown
   publicBaseUrl?: unknown
   readOnly?: unknown
   endpoints?: {
@@ -93,6 +94,7 @@ export async function runProductionSmoke(baseUrlInput = process.env.SOLSWAP_INDE
   assert.equal(serviceInfo.serviceId, 'si.soramitsu.io', 'service-info serviceId must be si.soramitsu.io')
   assert.equal(serviceInfo.ecosystem, 'solana', 'service-info ecosystem must be solana')
   assert.equal(serviceInfo.chainId, 'solana:mainnet', 'service-info chainId must be solana:mainnet')
+  assert.equal(serviceInfo.network, 'mainnet', 'service-info network must be mainnet')
   assert.equal(
     serviceInfo.publicBaseUrl,
     'https://si.soramitsu.io',
