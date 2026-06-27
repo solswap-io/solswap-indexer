@@ -198,6 +198,14 @@ function fakeService() {
 async function testWalletRoutes() {
   const app = buildApp(testConfig(), fakeService())
 
+  const health = await app.inject({ method: 'GET', url: '/api/indexer/v1/health' })
+  assert.equal(health.statusCode, 200)
+  assert.equal(health.json().ok, true)
+  assert.equal(health.json().serviceId, 'si.soramitsu.io')
+  assert.equal(health.json().ecosystem, 'solana')
+  assert.equal(health.json().chainId, 'solana:mainnet')
+  assert.equal(health.json().network, 'mainnet')
+
   const balances = await app.inject({ method: 'GET', url: `/api/indexer/v1/accounts/${VALID_WALLET}/balances` })
   assert.equal(balances.statusCode, 200)
   const balancesBody = balances.json()
