@@ -11,6 +11,7 @@ type ServiceInfo = {
   serviceId?: unknown
   ecosystem?: unknown
   chainId?: unknown
+  network?: unknown
   publicBaseUrl?: unknown
   readOnly?: unknown
   endpoints?: {
@@ -19,6 +20,7 @@ type ServiceInfo = {
 }
 
 const DEFAULT_BASE_URL = 'https://si.soramitsu.io'
+const BODY_PREVIEW_LIMIT = 300
 
 export function normalizeBaseUrl(value: string): URL {
   const url = new URL(value)
@@ -32,34 +34,67 @@ function endpoint(baseUrl: URL, path: string): URL {
   return url
 }
 
+function bodyPreview(value: string): string {
+  const compact = value.replace(/\s+/g, ' ').trim()
+  if (!compact) return '<empty body>'
+  return compact.length > BODY_PREVIEW_LIMIT ? `${compact.slice(0, BODY_PREVIEW_LIMIT)}...` : compact
+}
+
+function deploymentHint(path: string): string {
+  if (path === '/api/indexer/v1/service-info') {
+    return 'Production routing must serve the Solswap v1 wallet API; deploy the current solswap-indexer image to si.soramitsu.io and expose /api/indexer/v1/service-info.'
+  }
+  if (path === '/api/indexer/v1/openapi.json') {
+    return 'Production routing must serve the Solswap OpenAPI contract at /api/indexer/v1/openapi.json.'
+  }
+  return 'Production routing must serve the Solswap indexer contract at si.soramitsu.io.'
+}
+
 async function fetchJson(baseUrl: URL, path: string): Promise<unknown> {
   const response = await fetch(endpoint(baseUrl, path), {
     headers: { accept: 'application/json' },
   })
-  assert.equal(response.ok, true, `${path} returned HTTP ${response.status}`)
+  const rawBody = await response.text()
+  if (!response.ok) {
+    throw new Error(`${path} returned HTTP ${response.status}. Body preview: ${bodyPreview(rawBody)}. ${deploymentHint(path)}`)
+  }
+
   const contentType = response.headers.get('content-type') ?? ''
-  assert.match(contentType, /application\/json/i, `${path} did not return JSON`)
-  return response.json()
+  if (!/application\/json/i.test(contentType)) {
+    throw new Error(`${path} did not return JSON. Content-Type: ${contentType || '<missing>'}. Body preview: ${bodyPreview(rawBody)}. ${deploymentHint(path)}`)
+  }
+
+  try {
+    return JSON.parse(rawBody)
+  } catch {
+    throw new Error(`${path} returned invalid JSON. Body preview: ${bodyPreview(rawBody)}. ${deploymentHint(path)}`)
+  }
 }
 
 function assertPath(spec: OpenApiSpec, path: string) {
   assert.ok(spec.paths?.[path], `OpenAPI is missing ${path}`)
 }
 
+function objectKeys(value: unknown): string {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return '<non-object>'
+  return Object.keys(value as Record<string, unknown>).sort().join(',') || '<empty object>'
+}
+
 export async function runProductionSmoke(baseUrlInput = process.env.SOLSWAP_INDEXER_BASE_URL || DEFAULT_BASE_URL) {
   const baseUrl = normalizeBaseUrl(baseUrlInput)
   const health = await fetchJson(baseUrl, '/api/indexer/v1/health') as { ok?: unknown; lastMasterSeqno?: unknown }
-  assert.equal(health.ok, true, 'Solswap health response must include ok=true')
-  assert.equal(
-    'lastMasterSeqno' in health,
-    false,
-    'Solswap health response looks like the TON indexer contract',
-  )
+  if ('lastMasterSeqno' in health) {
+    throw new Error('SI production routing points at a TON indexer contract: health contains lastMasterSeqno. Route si.soramitsu.io to the Solswap indexer deployment.')
+  }
+  if (health.ok !== true) {
+    throw new Error(`SI production routing does not expose the Solswap health contract: expected ok=true, received keys ${objectKeys(health)}.`)
+  }
 
   const serviceInfo = await fetchJson(baseUrl, '/api/indexer/v1/service-info') as ServiceInfo
   assert.equal(serviceInfo.serviceId, 'si.soramitsu.io', 'service-info serviceId must be si.soramitsu.io')
   assert.equal(serviceInfo.ecosystem, 'solana', 'service-info ecosystem must be solana')
   assert.equal(serviceInfo.chainId, 'solana:mainnet', 'service-info chainId must be solana:mainnet')
+  assert.equal(serviceInfo.network, 'mainnet', 'service-info network must be mainnet')
   assert.equal(
     serviceInfo.publicBaseUrl,
     'https://si.soramitsu.io',

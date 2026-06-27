@@ -35,6 +35,7 @@ const validRoutes = (): Routes => ({
       serviceId: 'si.soramitsu.io',
       ecosystem: 'solana',
       chainId: 'solana:mainnet',
+      network: 'mainnet',
       publicBaseUrl: 'https://si.soramitsu.io',
       readOnly: true,
       endpoints: {
@@ -91,7 +92,15 @@ const main = async () => {
 
   const tonHealth = validRoutes()
   tonHealth['/api/indexer/v1/health'].body = { lastMasterSeqno: 123 }
-  await assertSmokeRejects(tonHealth, /Solswap health response must include ok=true/)
+  await assertSmokeRejects(tonHealth, /SI production routing points at a TON indexer contract/)
+
+  const genericHealth = validRoutes()
+  genericHealth['/api/indexer/v1/health'].body = { status: 'ok' }
+  await assertSmokeRejects(genericHealth, /SI production routing does not expose the Solswap health contract/)
+
+  const missingServiceInfo = validRoutes()
+  delete missingServiceInfo['/api/indexer/v1/service-info']
+  await assertSmokeRejects(missingServiceInfo, /deploy the current solswap-indexer image to si\.soramitsu\.io/)
 
   const wrongIdentity = validRoutes()
   wrongIdentity['/api/indexer/v1/service-info'].body = {
@@ -105,6 +114,13 @@ const main = async () => {
     },
   }
   await assertSmokeRejects(wrongIdentity, /service-info serviceId must be si\.soramitsu\.io/)
+
+  const wrongNetwork = validRoutes()
+  wrongNetwork['/api/indexer/v1/service-info'].body = {
+    ...(wrongNetwork['/api/indexer/v1/service-info'].body as Record<string, unknown>),
+    network: 'testnet',
+  }
+  await assertSmokeRejects(wrongNetwork, /service-info network must be mainnet/)
 
   const nonJson = validRoutes()
   nonJson['/api/indexer/v1/health'] = {

@@ -49,6 +49,7 @@ const fs = require('fs');
 const [evidenceFile, requireReadyRaw] = process.argv.slice(2);
 const requireReady = requireReadyRaw === 'true';
 const errors = [];
+const MAX_CLOCK_SKEW_MS = 5 * 60 * 1000;
 
 const serviceContracts = {
   'ti.soramitsu.io': {
@@ -56,6 +57,17 @@ const serviceContracts = {
     baseUrl: 'https://ti.soramitsu.io',
     smokeCommand: 'TON_INDEXER_BASE_URL=https://ti.soramitsu.io npm run smoke:production',
     dockerBuildCommand: 'docker build -t ton-indexer:release .',
+    serviceInfo: {
+      serviceId: 'ti.soramitsu.io',
+      ecosystem: 'ton',
+      chainId: 'ton:mainnet',
+      network: 'mainnet',
+      publicBaseUrl: 'https://ti.soramitsu.io',
+      readOnly: true,
+      endpoints: {
+        openapi: '/api/indexer/v1/openapi.json'
+      }
+    },
     requiredBlockers: [
       'production-deployment-evidence-missing',
       'live-production-smoke-failing',
@@ -67,6 +79,17 @@ const serviceContracts = {
     baseUrl: 'https://si.soramitsu.io',
     smokeCommand: 'SOLSWAP_INDEXER_BASE_URL=https://si.soramitsu.io npm run smoke:production',
     dockerBuildCommand: 'docker build -t solswap-indexer:release .',
+    serviceInfo: {
+      serviceId: 'si.soramitsu.io',
+      ecosystem: 'solana',
+      chainId: 'solana:mainnet',
+      network: 'mainnet',
+      publicBaseUrl: 'https://si.soramitsu.io',
+      readOnly: true,
+      endpoints: {
+        openapi: '/api/indexer/v1/openapi.json'
+      }
+    },
     requiredBlockers: [
       'production-deployment-evidence-missing',
       'live-production-smoke-failing',
@@ -81,8 +104,36 @@ const requiredEvidenceFields = [
   'deploymentId',
   'baseUrl',
   'smokeCommand',
+  'deployedAt',
   'smokePassedAt',
+  'serviceInfo',
   'operator'
+];
+
+const requiredServiceInfoFields = [
+  'serviceId',
+  'ecosystem',
+  'chainId',
+  'network',
+  'publicBaseUrl',
+  'readOnly',
+  'endpoints'
+];
+
+const allowedManifestFields = [
+  'schemaVersion',
+  'scope',
+  'serviceId',
+  'baseUrl',
+  'status',
+  'releaseEnabled',
+  'lastReviewed',
+  'blockers',
+  'smokeCommand',
+  'dockerBuildCommand',
+  'readyVerificationCommands',
+  'requiredEvidenceFields',
+  'deploymentEvidence'
 ];
 
 function fail(message) {
@@ -117,6 +168,31 @@ function nonEmptyString(value) {
 
 function isIsoUtcSecond(value) {
   return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(String(value || ''));
+}
+
+function isFutureTimestamp(value) {
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) && millis > Date.now() + MAX_CLOCK_SKEW_MS;
+}
+
+function timestampMillis(value) {
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : null;
+}
+
+function isRepeatedHexPlaceholder(value) {
+  const hex = String(value || '').replace(/^sha256:/i, '').toLowerCase();
+  return /^[0-9a-f]+$/.test(hex) && new Set(hex).size === 1;
+}
+
+function isTemplatePlaceholder(value) {
+  const normalized = String(value || '').trim().toUpperCase();
+  return (
+    normalized.length === 0 ||
+    normalized.startsWith('TODO_') ||
+    normalized.startsWith('REPLACE_WITH_') ||
+    normalized.includes('PLACEHOLDER')
+  );
 }
 
 function secretLikeKeyReason(value, path = '$') {
@@ -158,6 +234,48 @@ function secretLikeKeyReason(value, path = '$') {
   return null;
 }
 
+function rejectUnsupportedKeys(value, allowedFields, path) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return;
+  }
+  const allowed = new Set(allowedFields);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      fail(`${path}.${key} is not supported in public deployment evidence`);
+    }
+  }
+}
+
+function validateServiceInfo(value, contract, path) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    fail(`${path} must be an object`);
+    return;
+  }
+
+  rejectUnsupportedKeys(value, requiredServiceInfoFields, path);
+  for (const field of ['serviceId', 'ecosystem', 'chainId', 'network', 'publicBaseUrl']) {
+    if (value[field] !== contract.serviceInfo[field]) {
+      fail(`${path}.${field} must be ${contract.serviceInfo[field]}`);
+    }
+  }
+
+  if (value.readOnly !== contract.serviceInfo.readOnly) {
+    fail(`${path}.readOnly must be ${contract.serviceInfo.readOnly}`);
+  }
+
+  if (!value.endpoints || typeof value.endpoints !== 'object' || Array.isArray(value.endpoints)) {
+    fail(`${path}.endpoints must be an object`);
+    return;
+  }
+
+  rejectUnsupportedKeys(value.endpoints, Object.keys(contract.serviceInfo.endpoints), `${path}.endpoints`);
+  for (const [name, expected] of Object.entries(contract.serviceInfo.endpoints)) {
+    if (value.endpoints[name] !== expected) {
+      fail(`${path}.endpoints.${name} must be ${expected}`);
+    }
+  }
+}
+
 const manifest = readJson(evidenceFile);
 let contract = null;
 
@@ -166,6 +284,7 @@ if (manifest) {
   if (secretLikePath) {
     fail(`${secretLikePath} must not be included in public deployment evidence`);
   }
+  rejectUnsupportedKeys(manifest, allowedManifestFields, 'deployment evidence');
 
   if (manifest.schemaVersion !== 1) {
     fail('schemaVersion must be 1');
@@ -190,8 +309,14 @@ if (manifest) {
       fail(`dockerBuildCommand must be ${contract.dockerBuildCommand}`);
     }
 
-    const commands = requireArray(manifest.readyVerificationCommands, 'readyVerificationCommands').join('\n');
+    const commandList = requireArray(manifest.readyVerificationCommands, 'readyVerificationCommands');
+    const commands = commandList.join('\n');
+    if (new Set(commandList).size !== commandList.length) {
+      fail('duplicate deployment evidence verification command');
+    }
     for (const marker of [
+      'npm run test:deployment-evidence-template',
+      'npm run generate:deployment-evidence-template -- --output build/reports/production-deployment-evidence-template.json',
       'npm run test:deployment-evidence-audit',
       'npm run audit:deployment-evidence -- --require-ready',
       contract.dockerBuildCommand,
@@ -204,9 +329,17 @@ if (manifest) {
 
     if (manifest.status === 'blocked') {
       const blockers = new Set(manifestBlockers);
+      if (blockers.size !== manifestBlockers.length) {
+        fail('duplicate deployment evidence blocker');
+      }
       for (const blocker of contract.requiredBlockers) {
         if (!blockers.has(blocker)) {
           fail(`blocked deployment evidence missing blocker ${blocker}`);
+        }
+      }
+      for (const blocker of manifestBlockers) {
+        if (!contract.requiredBlockers.includes(blocker)) {
+          fail(`unsupported deployment evidence blocker: ${blocker}`);
         }
       }
     }
@@ -228,10 +361,19 @@ if (manifest) {
     fail('status must be ready when --require-ready is used');
   }
 
-  const declaredFields = new Set(requireArray(manifest.requiredEvidenceFields, 'requiredEvidenceFields'));
+  const declaredFieldList = requireArray(manifest.requiredEvidenceFields, 'requiredEvidenceFields');
+  const declaredFields = new Set(declaredFieldList);
+  if (declaredFields.size !== declaredFieldList.length) {
+    fail('duplicate deployment evidence required field');
+  }
   for (const field of requiredEvidenceFields) {
     if (!declaredFields.has(field)) {
       fail(`requiredEvidenceFields missing ${field}`);
+    }
+  }
+  for (const field of declaredFieldList) {
+    if (!requiredEvidenceFields.includes(field)) {
+      fail(`unsupported deployment evidence field in manifest: ${field}`);
     }
   }
 
@@ -255,8 +397,12 @@ if (manifest) {
       fail(`deploymentEvidence[${index}] must be an object`);
       return;
     }
+    rejectUnsupportedKeys(entry, requiredEvidenceFields, `deploymentEvidence[${index}]`);
 
     for (const field of requiredEvidenceFields) {
+      if (field === 'serviceInfo') {
+        continue;
+      }
       if (!nonEmptyString(entry[field])) {
         fail(`deploymentEvidence[${index}].${field} must not be blank`);
       }
@@ -265,9 +411,15 @@ if (manifest) {
     if (!/^[0-9a-f]{40}$/i.test(String(entry.commit || ''))) {
       fail(`deploymentEvidence[${index}].commit must be a 40-character git commit`);
     }
+    if (isRepeatedHexPlaceholder(entry.commit)) {
+      fail(`deploymentEvidence[${index}].commit must not be a placeholder git commit`);
+    }
 
     if (!/^sha256:[0-9a-f]{64}$/i.test(String(entry.imageDigest || ''))) {
       fail(`deploymentEvidence[${index}].imageDigest must be a sha256 image digest`);
+    }
+    if (isRepeatedHexPlaceholder(entry.imageDigest)) {
+      fail(`deploymentEvidence[${index}].imageDigest must not be a placeholder image digest`);
     }
 
     if (contract && entry.baseUrl !== contract.baseUrl) {
@@ -278,11 +430,31 @@ if (manifest) {
       fail(`deploymentEvidence[${index}].smokeCommand must be ${contract.smokeCommand}`);
     }
 
+    if (contract) {
+      validateServiceInfo(entry.serviceInfo, contract, `deploymentEvidence[${index}].serviceInfo`);
+    }
+
+    if (!isIsoUtcSecond(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].deployedAt must be an ISO-8601 UTC second timestamp`);
+    } else if (isFutureTimestamp(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].deployedAt must not be in the future`);
+    }
+
     if (!isIsoUtcSecond(entry.smokePassedAt)) {
       fail(`deploymentEvidence[${index}].smokePassedAt must be an ISO-8601 UTC second timestamp`);
+    } else if (isFutureTimestamp(entry.smokePassedAt)) {
+      fail(`deploymentEvidence[${index}].smokePassedAt must not be in the future`);
+    } else if (isIsoUtcSecond(entry.deployedAt) && timestampMillis(entry.smokePassedAt) < timestampMillis(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].smokePassedAt must be at or after deployedAt`);
     }
 
     const deploymentId = String(entry.deploymentId || '').trim();
+    if (isTemplatePlaceholder(deploymentId)) {
+      fail(`deploymentEvidence[${index}].deploymentId must not be a placeholder deployment id`);
+    }
+    if (isTemplatePlaceholder(entry.operator)) {
+      fail(`deploymentEvidence[${index}].operator must not be a placeholder operator`);
+    }
     if (seenDeployments.has(deploymentId)) {
       fail(`duplicate deployment evidence id: ${deploymentId}`);
     }
