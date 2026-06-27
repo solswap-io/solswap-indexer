@@ -35,6 +35,7 @@ const validRoutes = (): Routes => ({
       serviceId: 'si.soramitsu.io',
       ecosystem: 'solana',
       chainId: 'solana:mainnet',
+      network: 'mainnet',
       publicBaseUrl: 'https://si.soramitsu.io',
       readOnly: true,
       endpoints: {
@@ -113,6 +114,13 @@ const main = async () => {
     },
   }
   await assertSmokeRejects(wrongIdentity, /service-info serviceId must be si\.soramitsu\.io/)
+
+  const wrongNetwork = validRoutes()
+  wrongNetwork['/api/indexer/v1/service-info'].body = {
+    ...(wrongNetwork['/api/indexer/v1/service-info'].body as Record<string, unknown>),
+    network: 'testnet',
+  }
+  await assertSmokeRejects(wrongNetwork, /service-info network must be mainnet/)
 
   const nonJson = validRoutes()
   nonJson['/api/indexer/v1/health'] = {
