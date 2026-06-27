@@ -104,6 +104,7 @@ const requiredEvidenceFields = [
   'deploymentId',
   'baseUrl',
   'smokeCommand',
+  'deployedAt',
   'smokePassedAt',
   'serviceInfo',
   'operator'
@@ -172,6 +173,11 @@ function isIsoUtcSecond(value) {
 function isFutureTimestamp(value) {
   const millis = Date.parse(value);
   return Number.isFinite(millis) && millis > Date.now() + MAX_CLOCK_SKEW_MS;
+}
+
+function timestampMillis(value) {
+  const millis = Date.parse(value);
+  return Number.isFinite(millis) ? millis : null;
 }
 
 function isRepeatedHexPlaceholder(value) {
@@ -428,10 +434,18 @@ if (manifest) {
       validateServiceInfo(entry.serviceInfo, contract, `deploymentEvidence[${index}].serviceInfo`);
     }
 
+    if (!isIsoUtcSecond(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].deployedAt must be an ISO-8601 UTC second timestamp`);
+    } else if (isFutureTimestamp(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].deployedAt must not be in the future`);
+    }
+
     if (!isIsoUtcSecond(entry.smokePassedAt)) {
       fail(`deploymentEvidence[${index}].smokePassedAt must be an ISO-8601 UTC second timestamp`);
     } else if (isFutureTimestamp(entry.smokePassedAt)) {
       fail(`deploymentEvidence[${index}].smokePassedAt must not be in the future`);
+    } else if (isIsoUtcSecond(entry.deployedAt) && timestampMillis(entry.smokePassedAt) < timestampMillis(entry.deployedAt)) {
+      fail(`deploymentEvidence[${index}].smokePassedAt must be at or after deployedAt`);
     }
 
     const deploymentId = String(entry.deploymentId || '').trim();
