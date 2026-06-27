@@ -166,6 +166,17 @@ cp "$blocked" "$missing_blocker"
 perl -0pi -e 's/,\n    "production-routing-mismatch"//' "$missing_blocker"
 expect_failure "blocked evidence missing routing blocker" "blocked deployment evidence missing blocker production-routing-mismatch" run_audit "$missing_blocker"
 
+unsupported_blocker="$tmp_dir/unsupported-blocker.json"
+cp "$blocked" "$unsupported_blocker"
+node - "$unsupported_blocker" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.blockers.push('manual-approval-pending');
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+expect_failure "unsupported deployment evidence blocker" "unsupported deployment evidence blocker: manual-approval-pending" run_audit "$unsupported_blocker"
+
 missing_ready_command="$tmp_dir/missing-ready-command.json"
 cp "$blocked" "$missing_ready_command"
 perl -0pi -e 's/npm run audit:deployment-evidence -- --require-ready/npm run audit:deployment-evidence/' "$missing_ready_command"

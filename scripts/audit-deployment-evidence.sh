@@ -324,6 +324,11 @@ if (manifest) {
           fail(`blocked deployment evidence missing blocker ${blocker}`);
         }
       }
+      for (const blocker of manifestBlockers) {
+        if (!contract.requiredBlockers.includes(blocker)) {
+          fail(`unsupported deployment evidence blocker: ${blocker}`);
+        }
+      }
     }
   }
 
