@@ -9,16 +9,26 @@
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "tsx src/scripts/smoke.ts"
+    "test": "tsx src/scripts/smoke.ts && tsx src/scripts/deployment-manifest-test.ts && tsx src/scripts/production-smoke-adversarial-test.ts",
+    "smoke:production": "tsx src/scripts/production-smoke.ts",
+    "generate:deployment-evidence-template": "bash scripts/generate-deployment-evidence-template.sh",
+    "audit:deployment-evidence": "bash scripts/audit-deployment-evidence.sh",
+    "test:deployment-evidence-audit": "bash scripts/test-deployment-evidence-audit.sh",
+    "test:deployment-evidence-template": "bash scripts/test-deployment-evidence-template.sh"
   },
   "dependencies": {
     "@solana/web3.js": "^1.98.4",
-    "fastify": "^5.7.2",
+    "fastify": "^5.8.5",
     "pino": "^10.3.0"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "overrides": {
+    "fast-uri": "^4.0.0",
+    "uuid": "^11.1.1",
+    "ws": "^8.21.0"
   }
 }

@@ -13,6 +13,10 @@ export type Config = {
   marketScanLimit: number
   cacheTtlMs: number
   corsAllowOrigin: string
+  rateLimitWindowMs: number
+  rateLimitMax: number
+  rpcRetryAttempts: number
+  rpcRetryBaseDelayMs: number
 }
 
 function envString(key: string): string | null {
@@ -60,5 +64,9 @@ export function loadConfig(): Config {
     marketScanLimit: envInt('MARKET_SCAN_LIMIT', 250),
     cacheTtlMs: envInt('CACHE_TTL_MS', 15_000),
     corsAllowOrigin: envString('CORS_ALLOW_ORIGIN') ?? '*',
+    rateLimitWindowMs: envInt('RATE_LIMIT_WINDOW_MS', 60_000),
+    rateLimitMax: envInt('RATE_LIMIT_MAX', 120),
+    rpcRetryAttempts: envInt('RPC_RETRY_ATTEMPTS', 3),
+    rpcRetryBaseDelayMs: envInt('RPC_RETRY_BASE_DELAY_MS', 250),
   }
 }
