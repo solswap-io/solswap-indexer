@@ -7,6 +7,19 @@ export const openApiSpec = {
   },
   components: {
     schemas: {
+      HealthResponse: {
+        type: 'object',
+        required: ['ok', 'serviceId', 'ecosystem', 'chainId', 'network', 'rpcEndpoint', 'syncedAt'],
+        properties: {
+          ok: { type: 'boolean', enum: [true] },
+          serviceId: { type: 'string', enum: ['si.soramitsu.io'] },
+          ecosystem: { type: 'string', enum: ['solana'] },
+          chainId: { type: 'string', enum: ['solana:mainnet'] },
+          network: { type: 'string', enum: ['mainnet'] },
+          rpcEndpoint: { type: 'string' },
+          syncedAt: { type: 'integer' },
+        },
+      },
       ServiceInfoResponse: {
         type: 'object',
         required: [
@@ -116,7 +129,16 @@ export const openApiSpec = {
     '/api/indexer/v1/health': {
       get: {
         summary: 'Health check',
-        responses: { '200': { description: 'Service health' } },
+        responses: {
+          '200': {
+            description: 'Service health',
+            content: {
+              'application/json': {
+                schema: { $ref: '#/components/schemas/HealthResponse' },
+              },
+            },
+          },
+        },
       },
     },
     '/api/indexer/v1/service-info': {

@@ -19,6 +19,15 @@ type ServiceInfo = {
   }
 }
 
+type HealthInfo = {
+  ok?: unknown
+  serviceId?: unknown
+  ecosystem?: unknown
+  chainId?: unknown
+  network?: unknown
+  lastMasterSeqno?: unknown
+}
+
 const DEFAULT_BASE_URL = 'https://si.soramitsu.io'
 const BODY_PREVIEW_LIMIT = 300
 
@@ -82,13 +91,17 @@ function objectKeys(value: unknown): string {
 
 export async function runProductionSmoke(baseUrlInput = process.env.SOLSWAP_INDEXER_BASE_URL || DEFAULT_BASE_URL) {
   const baseUrl = normalizeBaseUrl(baseUrlInput)
-  const health = await fetchJson(baseUrl, '/api/indexer/v1/health') as { ok?: unknown; lastMasterSeqno?: unknown }
+  const health = await fetchJson(baseUrl, '/api/indexer/v1/health') as HealthInfo
   if ('lastMasterSeqno' in health) {
     throw new Error('SI production routing points at a TON indexer contract: health contains lastMasterSeqno. Route si.soramitsu.io to the Solswap indexer deployment.')
   }
   if (health.ok !== true) {
     throw new Error(`SI production routing does not expose the Solswap health contract: expected ok=true, received keys ${objectKeys(health)}.`)
   }
+  assert.equal(health.serviceId, 'si.soramitsu.io', 'health serviceId must be si.soramitsu.io')
+  assert.equal(health.ecosystem, 'solana', 'health ecosystem must be solana')
+  assert.equal(health.chainId, 'solana:mainnet', 'health chainId must be solana:mainnet')
+  assert.equal(health.network, 'mainnet', 'health network must be mainnet')
 
   const serviceInfo = await fetchJson(baseUrl, '/api/indexer/v1/service-info') as ServiceInfo
   assert.equal(serviceInfo.serviceId, 'si.soramitsu.io', 'service-info serviceId must be si.soramitsu.io')

@@ -25,6 +25,10 @@ const validRoutes = (): Routes => ({
   '/api/indexer/v1/health': {
     body: {
       ok: true,
+      serviceId: 'si.soramitsu.io',
+      ecosystem: 'solana',
+      chainId: 'solana:mainnet',
+      network: 'mainnet',
       rpcEndpoint: 'http://127.0.0.1:8899',
       syncedAt: 1,
     },
@@ -97,6 +101,16 @@ const main = async () => {
   const genericHealth = validRoutes()
   genericHealth['/api/indexer/v1/health'].body = { status: 'ok' }
   await assertSmokeRejects(genericHealth, /SI production routing does not expose the Solswap health contract/)
+
+  const wrongHealthIdentity = validRoutes()
+  wrongHealthIdentity['/api/indexer/v1/health'].body = {
+    ok: true,
+    serviceId: 'ti.soramitsu.io',
+    ecosystem: 'ton',
+    chainId: 'ton:mainnet',
+    network: 'mainnet',
+  }
+  await assertSmokeRejects(wrongHealthIdentity, /health serviceId must be si\.soramitsu\.io/)
 
   const missingServiceInfo = validRoutes()
   delete missingServiceInfo['/api/indexer/v1/service-info']
