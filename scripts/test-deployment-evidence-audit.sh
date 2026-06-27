@@ -177,6 +177,17 @@ fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 NODE
 expect_failure "unsupported deployment evidence blocker" "unsupported deployment evidence blocker: manual-approval-pending" run_audit "$unsupported_blocker"
 
+duplicate_blocker="$tmp_dir/duplicate-blocker.json"
+cp "$blocked" "$duplicate_blocker"
+node - "$duplicate_blocker" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.blockers.push('production-routing-mismatch');
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+expect_failure "duplicate deployment evidence blocker" "duplicate deployment evidence blocker" run_audit "$duplicate_blocker"
+
 missing_ready_command="$tmp_dir/missing-ready-command.json"
 cp "$blocked" "$missing_ready_command"
 perl -0pi -e 's/npm run audit:deployment-evidence -- --require-ready/npm run audit:deployment-evidence/' "$missing_ready_command"
