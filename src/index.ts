@@ -13,6 +13,13 @@ const logger = pino({
 
 const allowedIntervals = new Set<CandleInterval>(['1m', '5m', '15m', '1h', '4h', '1d'])
 
+const serviceIdentity = {
+  serviceId: 'si.soramitsu.io',
+  ecosystem: 'solana',
+  chainId: 'solana:mainnet',
+  network: 'mainnet',
+} as const
+
 type IndexerServiceApi = Pick<
   IndexerService,
   | 'getWalletBalances'
@@ -80,11 +87,8 @@ export function buildApp(config: Config = loadConfig(), service: IndexerServiceA
   const rateBuckets = new Map<string, RateBucket>()
   const serviceInfo = {
     schemaVersion: 1,
-    serviceId: 'si.soramitsu.io',
+    ...serviceIdentity,
     serviceName: 'Solswap Indexer',
-    ecosystem: 'solana',
-    chainId: 'solana:mainnet',
-    network: 'mainnet',
     publicBaseUrl: 'https://si.soramitsu.io',
     readOnly: true,
     capabilities: [
@@ -159,6 +163,7 @@ export function buildApp(config: Config = loadConfig(), service: IndexerServiceA
 
   app.get('/api/indexer/v1/health', async () => ({
     ok: true,
+    ...serviceIdentity,
     rpcEndpoint: config.rpcEndpoint,
     syncedAt: Math.floor(Date.now() / 1000),
   }))
