@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 AUDIT_SCRIPT="$SCRIPT_DIR/audit-deployment-evidence.sh"
+FIXTURE_RELEASE_COMMIT="0123456789abcdef0123456789abcdef01234567"
 
 fail() {
   echo "[deployment-evidence-test][error] $*" >&2
@@ -122,7 +123,8 @@ JSON
 run_audit() {
   local manifest="$1"
   shift
-  bash "$AUDIT_SCRIPT" --evidence "$manifest" "$@"
+  local expected_commit="${DEPLOYMENT_EVIDENCE_EXPECTED_COMMIT:-$FIXTURE_RELEASE_COMMIT}"
+  DEPLOYMENT_EVIDENCE_EXPECTED_COMMIT="$expected_commit" bash "$AUDIT_SCRIPT" --evidence "$manifest" "$@"
 }
 
 expect_failure() {
@@ -157,6 +159,18 @@ write_ready_manifest "$ready"
 
 run_audit "$blocked" >/dev/null
 run_audit "$ready" --require-ready >/dev/null
+
+stale_release_commit="$tmp_dir/stale-release-commit.json"
+cp "$ready" "$stale_release_commit"
+expect_failure \
+  "stale release commit evidence" \
+  "commit must match expected release commit fedcba9876543210fedcba9876543210fedcba98" \
+  env DEPLOYMENT_EVIDENCE_EXPECTED_COMMIT=fedcba9876543210fedcba9876543210fedcba98 bash "$AUDIT_SCRIPT" --evidence "$stale_release_commit" --require-ready
+
+expect_failure \
+  "malformed expected release commit" \
+  "DEPLOYMENT_EVIDENCE_EXPECTED_COMMIT must be a 40-character git commit" \
+  env DEPLOYMENT_EVIDENCE_EXPECTED_COMMIT=not-a-commit bash "$AUDIT_SCRIPT" --evidence "$stale_release_commit" --require-ready
 
 expect_failure "missing deployment evidence manifest" "production deployment evidence manifest missing" run_audit "$tmp_dir/missing.json"
 
