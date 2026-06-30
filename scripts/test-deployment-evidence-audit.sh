@@ -94,6 +94,7 @@ write_ready_manifest() {
       "deployedAt": "2026-06-26T00:00:00Z",
       "smokePassedAt": "2026-06-26T00:00:00Z",
       "serviceInfo": {
+        "schemaVersion": 1,
         "serviceId": "si.soramitsu.io",
         "ecosystem": "solana",
         "chainId": "solana:mainnet",
@@ -299,10 +300,20 @@ cp "$ready" "$placeholder_deployment_id"
 perl -0pi -e 's/si-release-20260626/TODO_PRODUCTION_DEPLOYMENT_ID/' "$placeholder_deployment_id"
 expect_failure "placeholder deployment id evidence" "deploymentId must not be a placeholder deployment id" run_audit "$placeholder_deployment_id" --require-ready
 
+sample_deployment_id="$tmp_dir/sample-deployment-id.json"
+cp "$ready" "$sample_deployment_id"
+perl -0pi -e 's/si-release-20260626/sample-deployment/' "$sample_deployment_id"
+expect_failure "sample deployment id evidence" "deploymentId must not be a placeholder deployment id" run_audit "$sample_deployment_id" --require-ready
+
 placeholder_operator="$tmp_dir/placeholder-operator.json"
 cp "$ready" "$placeholder_operator"
 perl -0pi -e 's/"operator": "release"/"operator": "TODO_RELEASE_OPERATOR"/' "$placeholder_operator"
 expect_failure "placeholder operator evidence" "operator must not be a placeholder operator" run_audit "$placeholder_operator" --require-ready
+
+dummy_operator="$tmp_dir/dummy-operator.json"
+cp "$ready" "$dummy_operator"
+perl -0pi -e 's/"operator": "release"/"operator": "dummy operator"/' "$dummy_operator"
+expect_failure "dummy operator evidence" "operator must not be a placeholder operator" run_audit "$dummy_operator" --require-ready
 
 duplicate_deployment="$tmp_dir/duplicate-deployment.json"
 cp "$ready" "$duplicate_deployment"
@@ -362,6 +373,17 @@ delete manifest.deploymentEvidence[0].serviceInfo;
 fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
 NODE
 expect_failure "missing service info evidence" "serviceInfo must be an object" run_audit "$missing_service_info" --require-ready
+
+wrong_service_info_schema_version="$tmp_dir/wrong-service-info-schema-version.json"
+cp "$ready" "$wrong_service_info_schema_version"
+node - "$wrong_service_info_schema_version" <<'NODE'
+const fs = require('fs');
+const file = process.argv[2];
+const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+manifest.deploymentEvidence[0].serviceInfo.schemaVersion = 2;
+fs.writeFileSync(file, `${JSON.stringify(manifest, null, 2)}\n`);
+NODE
+expect_failure "wrong service info schema version evidence" "serviceInfo.schemaVersion must be 1" run_audit "$wrong_service_info_schema_version" --require-ready
 
 wrong_service_info_id="$tmp_dir/wrong-service-info-id.json"
 cp "$ready" "$wrong_service_info_id"
