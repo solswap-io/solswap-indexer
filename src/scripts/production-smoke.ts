@@ -8,6 +8,7 @@ type OpenApiSpec = {
 }
 
 type ServiceInfo = {
+  schemaVersion?: unknown
   serviceId?: unknown
   ecosystem?: unknown
   chainId?: unknown
@@ -105,6 +106,7 @@ export async function runProductionSmoke(baseUrlInput = process.env.SOLSWAP_INDE
 
   const serviceInfo = await fetchJson(baseUrl, '/api/indexer/v1/service-info') as ServiceInfo
   assert.equal(serviceInfo.serviceId, 'si.soramitsu.io', 'service-info serviceId must be si.soramitsu.io')
+  assert.equal(serviceInfo.schemaVersion, 1, 'service-info schemaVersion must be 1')
   assert.equal(serviceInfo.ecosystem, 'solana', 'service-info ecosystem must be solana')
   assert.equal(serviceInfo.chainId, 'solana:mainnet', 'service-info chainId must be solana:mainnet')
   assert.equal(serviceInfo.network, 'mainnet', 'service-info network must be mainnet')
