@@ -116,6 +116,17 @@ const main = async () => {
   delete missingServiceInfo['/api/indexer/v1/service-info']
   await assertSmokeRejects(missingServiceInfo, /deploy the current solswap-indexer image to si\.soramitsu\.io/)
 
+  const serviceInfoDeploying = validRoutes()
+  serviceInfoDeploying['/api/indexer/v1/service-info'] = {
+    status: 503,
+    contentType: 'text/plain; charset=utf-8',
+    body: 'deploy in progress',
+  }
+  await assertSmokeRejects(
+    serviceInfoDeploying,
+    /\/api\/indexer\/v1\/service-info returned HTTP 503\. Body preview: deploy in progress\..*deploy the current solswap-indexer image to si\.soramitsu\.io/
+  )
+
   const missingSchemaVersion = validRoutes()
   delete (missingSchemaVersion['/api/indexer/v1/service-info'].body as Record<string, unknown>).schemaVersion
   await assertSmokeRejects(missingSchemaVersion, /service-info schemaVersion must be 1/)
@@ -145,7 +156,17 @@ const main = async () => {
     contentType: 'text/plain; charset=utf-8',
     body: 'ok',
   }
-  await assertSmokeRejects(nonJson, /\/api\/indexer\/v1\/health did not return JSON/)
+  await assertSmokeRejects(nonJson, /\/api\/indexer\/v1\/health did not return JSON\..*Body preview: ok/)
+
+  const invalidOpenApiJson = validRoutes()
+  invalidOpenApiJson['/api/indexer/v1/openapi.json'] = {
+    contentType: 'application/json',
+    body: '{"openapi":',
+  }
+  await assertSmokeRejects(
+    invalidOpenApiJson,
+    /\/api\/indexer\/v1\/openapi\.json returned invalid JSON\. Body preview: \{"openapi":\..*Solswap OpenAPI contract/
+  )
 
   const missingOpenApiPath = validRoutes()
   const spec = missingOpenApiPath['/api/indexer/v1/openapi.json'].body as { paths: Record<string, unknown> }
